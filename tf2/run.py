@@ -441,11 +441,11 @@ def perform_evaluation(model, builder, eval_steps, ckpt_path, strategy, topology
   if FLAGS.train_mode == 'pretrain' and not FLAGS.lineareval_while_pretraining:
     logging.info('Skipping eval during pretraining without linear eval.')
     return {} # Return empty dict or None
-
+  logging.info("Attempting to build training dataset iterator...")
   # Build input pipeline.
   ds = data_lib.build_distributed_dataset(builder, FLAGS.eval_batch_size, is_training=False, # explicit is_training
                                           strategy=strategy, topology=topology) # Pass topology
-  
+  logging.info("Training dataset iterator created successfully.")
   eval_summary_dir = os.path.join(FLAGS.model_dir, "eval_" + (FLAGS.eval_name or FLAGS.eval_split))
   summary_writer = tf.summary.create_file_writer(eval_summary_dir)
 
@@ -776,11 +776,20 @@ def main(argv):
 
     # Training loop
     # Build training dataset iterator
-    train_iterator = iter(data_lib.build_distributed_dataset(
-        builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
-    ))
+# In run.py, inside main(), right after the scope for checkpoint_manager:
 
-    logging.info("Starting training...")
+  logging.info("Checkpoint logic complete. Attempting to create data iterator...") # NEW LOG 1
+  try:
+      train_iterator = iter(data_lib.build_distributed_dataset(
+          builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
+      ))
+      logging.info("Data iterator CREATED successfully.") # NEW LOG 2
+  except Exception as e:
+      logging.error(f"ERROR CREATING DATA ITERATOR: {e}", exc_info=True) # NEW LOG 3 (if error)
+      raise # Stop if iterator fails
+
+  logging.info("Starting training...") # Your existing log
+# ... (rest of the training loop) ...
     # Get current step from optimizer.iterations
     # optimizer.iterations is a tf.Variable
     
