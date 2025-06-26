@@ -44,6 +44,27 @@ FLAGS = flags.FLAGS
 BATCH_NORM_EPSILON = 1e-5
 
 
+# In resnet.py
+
+from absl import flags
+from absl import logging
+import tensorflow as tf
+
+# Try importing SyncBatchNormalization directly from tensorflow.keras.layers or keras.layers
+try:
+    from tensorflow.keras.layers import SyncBatchNormalization
+except ImportError:
+    # Fallback for Keras 3 being the primary 'keras' import
+    # This might happen if `import keras` is used elsewhere and TF defaults to Keras 3 paths.
+    # Or if TF_USE_LEGACY_KERAS is NOT set, Keras 3 is the default.
+    import keras # Or: from tensorflow import keras
+    SyncBatchNormalization = keras.layers.SyncBatchNormalization
+
+
+FLAGS = flags.FLAGS
+BATCH_NORM_EPSILON = 1e-5
+
+
 class BatchNormRelu(tf.keras.layers.Layer):
   """Combined Batch Normalization and ReLU activation layer."""
 
@@ -57,18 +78,20 @@ class BatchNormRelu(tf.keras.layers.Layer):
                **kwargs):
     super().__init__(name=name, **kwargs)
     self.relu = relu
-    self.init_zero = init_zero # Store for get_config
+    self.init_zero = init_zero 
     self.center = center
     self.scale = scale
     self.data_format = data_format
-    self._batch_norm_decay = FLAGS.batch_norm_decay # Store for get_config
-    self._global_bn = FLAGS.global_bn # Store for get_config
+    # It's better to read FLAGS once and store, or pass them if this layer is to be more reusable.
+    self._batch_norm_decay = getattr(FLAGS, 'batch_norm_decay', 0.9) # Provide default if flag not found
+    self._global_bn = getattr(FLAGS, 'global_bn', True) # Provide default
 
     gamma_initializer = tf.zeros_initializer() if init_zero else tf.ones_initializer()
     axis = -1 if data_format == 'channels_last' else 1
 
     if self._global_bn:
-      self.bn = tf.keras.layers.SyncBatchNormalization(
+      # Use the imported SyncBatchNormalization
+      self.bn = SyncBatchNormalization( 
           axis=axis,
           momentum=self._batch_norm_decay,
           epsilon=BATCH_NORM_EPSILON,
@@ -78,17 +101,17 @@ class BatchNormRelu(tf.keras.layers.Layer):
           name="sync_batch_norm"
       )
     else:
-      self.bn = tf.keras.layers.BatchNormalization(
+      self.bn = tf.keras.layers.BatchNormalization( # Standard BN is fine here
           axis=axis,
           momentum=self._batch_norm_decay,
           epsilon=BATCH_NORM_EPSILON,
           center=center,
           scale=scale,
-          fused=None,
+          fused=None, 
           gamma_initializer=gamma_initializer,
           name="batch_norm"
       )
-
+  # ... rest of BatchNormRelu class (call, get_config) ...
   def call(self, inputs: tf.Tensor, training: bool | None = None) -> tf.Tensor:
     x = self.bn(inputs, training=training)
     if self.relu:
@@ -103,12 +126,12 @@ class BatchNormRelu(tf.keras.layers.Layer):
         "center": self.center,
         "scale": self.scale,
         "data_format": self.data_format,
-        "batch_norm_decay": self._batch_norm_decay, # Save the value used
-        "global_bn": self._global_bn, # Save the value used
-        # Epsilon is part of BN layer's config already if needed
+        "batch_norm_decay": self._batch_norm_decay,
+        "global_bn": self._global_bn,
     })
     return config
 
+# ... rest of resnet.py ...
 
 # In resnet.py
 
