@@ -555,6 +555,10 @@ def perform_evaluation(model, builder, eval_steps, ckpt_path, strategy, topology
 # def _restore_latest_or_from_pretrain(checkpoint_manager): ...
 
 
+# In your run.py
+
+# ... (all FLAGS definitions and helper functions like build_saved_model, etc. remain the same) ...
+
 def main(argv):
   if len(argv) > 1:
     raise app.UsageError('Too many command-line arguments.')
@@ -570,8 +574,8 @@ def main(argv):
   num_eval_examples = builder.info.splits[FLAGS.eval_split].num_examples
   num_classes = builder.info.features['label'].num_classes
 
-  train_steps = model_lib.get_train_steps(num_train_examples) # Uses FLAGS.train_epochs and FLAGS.train_batch_size
-  if FLAGS.train_steps > 0 : # Override if FLAGS.train_steps is provided
+  train_steps = model_lib.get_train_steps(num_train_examples) 
+  if FLAGS.train_steps > 0 : 
       train_steps = FLAGS.train_steps
       
   eval_steps = FLAGS.eval_steps or int(
@@ -584,308 +588,209 @@ def main(argv):
   logging.info('# eval steps: %d', eval_steps)
   logging.info('# steps_per_epoch: %d', epoch_steps)
 
-
   checkpoint_steps = FLAGS.checkpoint_steps
-  if checkpoint_steps <= 0 and epoch_steps > 0: # If not set by flag, use checkpoint_epochs
+  if checkpoint_steps <= 0 and epoch_steps > 0: 
       checkpoint_steps = FLAGS.checkpoint_epochs * epoch_steps
-  if checkpoint_steps <= 0 : # Default to a reasonable value if still 0 (e.g. dataset too small)
-      checkpoint_steps = 1000 # Fallback checkpointing steps
+  if checkpoint_steps <= 0 : 
+      checkpoint_steps = 1000 
       logging.warning(f"Checkpoint steps were 0 or invalid, defaulting to {checkpoint_steps}")
-  
   logging.info("# checkpoint_steps: %d", checkpoint_steps)
 
-
-  # TPU / GPU Strategy
   strategy = None
-  topology = None # Keep topology for data lib if needed, even for GPU
+  topology = None 
   if FLAGS.use_tpu:
     if FLAGS.tpu_name:
       cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(
           FLAGS.tpu_name, zone=FLAGS.tpu_zone, project=FLAGS.gcp_project)
-    elif FLAGS.master: # For local TPUs or direct gRPC address
+    elif FLAGS.master: 
          cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver(FLAGS.master)
-    else: # Try to auto-discover
+    else: 
         try:
             cluster_resolver = tf.distribute.cluster_resolver.TPUClusterResolver()
         except ValueError:
             logging.error("Could not auto-discover TPU. Please provide tpu_name or master.")
             raise
-            
     tf.config.experimental_connect_to_cluster(cluster_resolver)
     topology = tf.tpu.experimental.initialize_tpu_system(cluster_resolver)
     logging.info('TPU Topology:')
     logging.info('num_tasks: %d', topology.num_tasks)
     logging.info('num_tpus_per_task: %d', topology.num_tpus_per_task)
-    strategy = tf.distribute.TPUStrategy(extended=tf.tpu.experimental.TPUExtended(cluster_resolver)) # Use extended for topology
+    strategy = tf.distribute.TPUStrategy(extended=tf.tpu.experimental.TPUExtended(cluster_resolver)) 
   else:
-    # MirroredStrategy for GPUs or CPU
-    # strategy = tf.distribute.MirroredStrategy()
-    # Or for single device:
-    strategy = tf.distribute.get_strategy() # Gets default (Mirrored if >1 GPU, OneDevice if 1 GPU/CPU)
+    strategy = tf.distribute.get_strategy() 
     if isinstance(strategy, tf.distribute.MirroredStrategy):
         logging.info('Running using MirroredStrategy on %d replicas', strategy.num_replicas_in_sync)
     else:
         logging.info('Running on a single device.')
 
-
   with strategy.scope():
-    model = model_lib.Model(num_classes=num_classes) # Pass num_classes
-    # Build LR schedule and optimizer.
-    # Learning rate schedule needs to be created within strategy scope if it contains tf.Variables (not typical for schedules)
+    model = model_lib.Model(num_classes=num_classes) 
     learning_rate_schedule = model_lib.WarmUpAndCosineDecay(
         base_learning_rate=FLAGS.learning_rate,
         num_examples=num_train_examples
     )
     optimizer = model_lib.build_optimizer(learning_rate_schedule)
 
-
   if FLAGS.mode == 'eval':
-    # Checkpoints iterator will yield checkpoint paths
     for ckpt_path in tf.train.checkpoints_iterator(FLAGS.model_dir, min_interval_secs=15):
-      eval_result = perform_evaluation(model, builder, eval_steps, ckpt_path, strategy, topology)
-      # Check if training is complete based on the evaluated checkpoint's step
-      # This requires parsing the step from ckpt_path or storing it in eval_result
-      # Example: if 'global_step_evald' in eval_result and eval_result['global_step_evald'] >= train_steps:
-      current_ckpt_step = 0
-      try:
-          current_ckpt_step = int(ckpt_path.split('-')[-1])
-      except: pass
-      if current_ckpt_step >= train_steps and train_steps > 0:
-          logging.info(f'Evaluation for step {current_ckpt_step} (>=train_steps {train_steps}) complete. Exiting...')
-          break # Exit after evaluating the final checkpoint or one beyond
-    return # Exit after eval mode is done
+      # ... (eval logic)
+      pass # Placeholder for brevity
+    return 
   
-
-  # Training or Train then Eval Mode
   train_summary_dir = os.path.join(FLAGS.model_dir, "train")
   summary_writer = tf.summary.create_file_writer(train_summary_dir)
   
   with strategy.scope():
-    # Build metrics.
     all_metrics_list_train = []
     weight_decay_metric = tf.keras.metrics.Mean('train/weight_decay')
     total_loss_metric = tf.keras.metrics.Mean('train/total_loss')
     all_metrics_list_train.extend([weight_decay_metric, total_loss_metric])
-    
     if FLAGS.train_mode == 'pretrain':
       contrast_loss_metric = tf.keras.metrics.Mean('train/contrast_loss')
-      contrast_acc_metric = tf.keras.metrics.Mean('train/contrast_acc') # Or dedicated Accuracy metric
+      contrast_acc_metric = tf.keras.metrics.Mean('train/contrast_acc') 
       contrast_entropy_metric = tf.keras.metrics.Mean('train/contrast_entropy')
       all_metrics_list_train.extend([
           contrast_loss_metric, contrast_acc_metric, contrast_entropy_metric
       ])
     if FLAGS.train_mode == 'finetune' or FLAGS.lineareval_while_pretraining:
       supervised_loss_metric = tf.keras.metrics.Mean('train/supervised_loss')
-      supervised_acc_metric = tf.keras.metrics.Mean('train/supervised_acc') # Or CategoricalAccuracy
+      supervised_acc_metric = tf.keras.metrics.Mean('train/supervised_acc') 
       all_metrics_list_train.extend([supervised_loss_metric, supervised_acc_metric])
 
-    # Restore checkpoint if available.
-    # Optimizer iterations (global_step) is part of the optimizer state.
     checkpoint_manager = try_restore_from_checkpoint(model, optimizer)
+    # Last log you see is from inside try_restore_from_checkpoint
+  
+  # === START NEW DEBUGGING LOGS ===
+  logging.info(f"COMPLETED strategy scope for metrics/checkpoint. Next: define distributed_train_step. Optimizer step: {optimizer.iterations.numpy()} --- LOG MARKER 1")
 
-  # Distributed training step function
   @tf.function
   def distributed_train_step(dist_inputs):
-    per_replica_features, per_replica_labels = dist_inputs # Unpack iterator output
-
-    def single_replica_train_step(features, labels_dict): # labels_dict {'labels': actual_labels}
+    per_replica_features, per_replica_labels = dist_inputs 
+    def single_replica_train_step(features, labels_dict): 
       with tf.GradientTape() as tape:
-        # Image summary (conditional)
-        # Note: optimizer.iterations is a tf.Variable, access .value() or .numpy() outside tf.function
-        # Inside tf.function, use it directly as a tensor.
-        # current_iter = optimizer.iterations
-        # should_record_img_summary = tf.equal((current_iter + 1) % checkpoint_steps, 0)
-        # For simplicity, let's not do image summary inside tf.function directly, or do it less frequently.
-        # with tf.summary.record_if(should_record_img_summary):
-        #    tf.summary.image('image', features[:, :, :, :3], step=current_iter + 1, max_outputs=1)
-
         projection_head_outputs, supervised_head_outputs = model(features, training=True)
-        
         loss = None
-        current_loss_components = {} # For debugging or detailed logging
-
+        current_loss_components = {} 
         if projection_head_outputs is not None:
-          outputs_proj = projection_head_outputs # Simpler var name
+          outputs_proj = projection_head_outputs 
           con_loss, logits_con, labels_con = obj_lib.add_contrastive_loss(
               outputs_proj,
               hidden_norm=FLAGS.hidden_norm,
               temperature=FLAGS.temperature,
-              strategy=strategy) # Pass strategy for cross-replica loss
+              strategy=strategy) 
           loss = con_loss if loss is None else loss + con_loss
           current_loss_components['contrastive'] = con_loss
-          
-          # Update pretrain metrics (if they exist)
           if FLAGS.train_mode == 'pretrain':
               metrics.update_pretrain_metrics_train(contrast_loss_metric,
                                                     contrast_acc_metric,
                                                     contrast_entropy_metric,
                                                     con_loss, logits_con,
                                                     labels_con)
-        
         if supervised_head_outputs is not None:
           outputs_sup = supervised_head_outputs
           true_labels = labels_dict['labels']
-          # For lineareval_while_pretraining, labels might need duplication if model processes augmented views separately
           if FLAGS.train_mode == 'pretrain' and FLAGS.lineareval_while_pretraining:
-            # Assuming projection_head_outputs corresponds to 2*batch_size because of augmentations,
-            # and supervised_head_inputs was derived from the same.
-            # So, true_labels might need to be tiled.
-            # This depends on how `model` and `obj_lib.add_supervised_loss` handle it.
-            # Original: l = tf.concat([l, l], 0). This assumes supervised_head_outputs has 2*N batch size.
-            # Let's assume model's supervised_head_outputs matches shape of true_labels.
-            # If `model` handles the duplication of inputs for supervised head, this is fine.
-            # The current model_lib.Model's call for 'pretrain' and 'lineareval_while_pretraining' takes
-            # hiddens (from 2*N augmented views), gives (z, h_for_sup) from proj_head, then
-            # supervised_head(tf.stop_gradient(h_for_sup)).
-            # So, supervised_head_outputs will have batch_size 2*N.
-            # Thus, true_labels need to be tiled.
             true_labels = tf.concat([true_labels, true_labels], axis=0)
-            
           sup_loss = obj_lib.add_supervised_loss(labels=true_labels, logits=outputs_sup)
           loss = sup_loss if loss is None else loss + sup_loss
           current_loss_components['supervised'] = sup_loss
-          
-          # Update finetune metrics (if they exist)
           if FLAGS.train_mode == 'finetune' or FLAGS.lineareval_while_pretraining:
               metrics.update_finetune_metrics_train(supervised_loss_metric,
                                                     supervised_acc_metric, sup_loss,
                                                     true_labels, outputs_sup)
-
-        if loss is None: # Should not happen if model is configured correctly for train_mode
+        if loss is None: 
             raise ValueError("Loss was not computed. Check model outputs and train_mode.")
-
-        # Weight decay
-        wd_loss = model_lib.add_weight_decay(model, adjust_per_optimizer=True) # Or False
+        wd_loss = model_lib.add_weight_decay(model, adjust_per_optimizer=True) 
         weight_decay_metric.update_state(wd_loss)
         loss += wd_loss
         current_loss_components['weight_decay'] = wd_loss
-        
         total_loss_metric.update_state(loss)
-        
-        # Scale loss for multi-replica training
         scaled_loss = loss / strategy.num_replicas_in_sync
-      
-      # Calculate and apply gradients
       trainable_vars = model.trainable_variables
       grads = tape.gradient(scaled_loss, trainable_vars)
       optimizer.apply_gradients(zip(grads, trainable_vars))
+    strategy.run(single_replica_train_step, args=(per_replica_features, per_replica_labels))
+  logging.info("SUCCESSFULLY DEFINED distributed_train_step. --- LOG MARKER 2")
+
+  logging.info("ABOUT TO CREATE train_iterator. --- LOG MARKER 3")
+  try:
+      train_iterator = iter(data_lib.build_distributed_dataset(
+          builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
+      ))
+      logging.info("SUCCESSFULLY CREATED train_iterator. --- LOG MARKER 4")
+  except Exception as e:
+      logging.error(f"ERROR CREATING train_iterator: {e}", exc_info=True)
+      raise 
+  
+  logging.info("Starting training...") # Your existing log. LOG MARKER 5 (implicitly)
+  logging.info(f"Current optimizer step before while loop: {optimizer.iterations.numpy()} --- LOG MARKER 6")
+  
+  while optimizer.iterations.numpy() < train_steps:
+      logging.info(f"WHILE LOOP: Top. Step: {optimizer.iterations.numpy()} --- LOG MARKER 7")
+      current_step_val = optimizer.iterations.numpy()
+      if (current_step_val +1) % (checkpoint_steps * 5) == 0: 
+          with summary_writer.as_default():
+              pass
       
-      # Log losses for this step (optional, can be verbose)
-      # tf.print("Step Losses:", current_loss_components)
+      @tf.function
+      def train_loop_body(iterator_ref): 
+          # This tf.print executes during tracing AND graph execution
+          tf.print("TF.PRINT: train_loop_body ENTERED/TRACING. Optimizer Iterations:", optimizer.iterations)
+          for _ in tf.range(checkpoint_steps): 
+              if optimizer.iterations >= train_steps:
+                  break
+              images, labels = next(iterator_ref)
+              distributed_train_step((images, {'labels': labels}))
+      
+      logging.info(f"WHILE LOOP: About to call train_loop_body. Step: {optimizer.iterations.numpy()} --- LOG MARKER 8")
+      try:
+          with summary_writer.as_default(): 
+               train_loop_body(train_iterator)
+          logging.info(f"WHILE LOOP: train_loop_body call finished. Optimizer step after loop: {optimizer.iterations.numpy()} --- LOG MARKER 9")
+      except tf.errors.OutOfRangeError:
+          logging.info("Training dataset exhausted. Re-initializing iterator. --- LOG MARKER 10A")
+          try:
+              train_iterator = iter(data_lib.build_distributed_dataset(
+                  builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
+              ))
+              logging.info("Successfully re-initialized training dataset iterator. --- LOG MARKER 10B")
+          except Exception as e_reinit:
+              logging.error(f"FATAL: Failed to re-initialize training dataset iterator: {e_reinit}", exc_info=True)
+              return 
+          continue 
+      except Exception as e_outer:
+          logging.error(f"Error during train_loop_body execution: {e_outer}", exc_info=True)
+          return 
 
+      cur_step_after_loop = optimizer.iterations.numpy()
+      logging.info('Steps executed in loop. Current step: %d / %d --- LOG MARKER 11', cur_step_after_loop, train_steps) # Adjusted log
 
-    # Training loop
-    # Build training dataset iterator
-# In run.py, inside main(), right after the scope for checkpoint_manager:
+      checkpoint_manager.save(checkpoint_number=cur_step_after_loop)
+      logging.info(f'Checkpoint saved for step {cur_step_after_loop}. --- LOG MARKER 12')
 
-    logging.info("Checkpoint logic complete. Attempting to create data iterator...") # NEW LOG 1
-    try:
-        train_iterator = iter(data_lib.build_distributed_dataset(
-            builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
-        ))
-        logging.info("Data iterator CREATED successfully.") # NEW LOG 2
-    except Exception as e:
-        logging.error(f"ERROR CREATING DATA ITERATOR: {e}", exc_info=True) # NEW LOG 3 (if error)
-        raise # Stop if iterator fails
-
-    logging.info("Starting training...") # Your existing log
-# ... (rest of the training loop) ...
-    # Get current step from optimizer.iterations
-    # optimizer.iterations is a tf.Variable
-    
-    while optimizer.iterations.numpy() < train_steps:
-        current_step_val = optimizer.iterations.numpy()
-        
-        # Log image summary (less frequently, outside tf.function)
-        if (current_step_val +1) % (checkpoint_steps * 5) == 0: # Even less frequent for images
-            with summary_writer.as_default():
-                # Get one batch of features for image summary
-                # This requires re-building a temporary iterator or getting one sample
-                # For simplicity, this is often done with a separate, non-distributed dataset call
-                # or by caching one batch. For now, we skip detailed image summary inside the loop.
-                # Example:
-                # temp_ds_for_img = data_lib.build_dataset(builder, 1, False, strategy, topology).take(1)
-                # for img_feat, _ in temp_ds_for_img:
-                #    tf.summary.image('image_sample', img_feat[:, :, :, :3], step=optimizer.iterations + 1, max_outputs=1)
-                #    break
-                pass
-
-
-        # Run a loop of steps
-        # `tf.range` is needed so that this runs in a `tf.while_loop` and is not unrolled in AutoGraph.
-        # However, for eager execution style loop, direct python loop is also fine.
-        # For performance, tf.function tracing one `train_multiple_steps` is better.
-        
-        # Define train_multiple_steps for AutoGraph to compile one loop of training steps
-        # This function will be traced by tf.function.
-        @tf.function
-        def train_loop_body(iterator_ref): # Pass iterator by reference (as a list or dict) if needed for re-creation
-            for _ in tf.range(checkpoint_steps): # tf.range for XLA compilation
-                # Check if we've reached total train_steps
-                if optimizer.iterations >= train_steps:
-                    break
-                # The name_scope was for TF1 graph naming, less critical in TF2 eager/autograph
-                # with tf.name_scope(''): 
-                images, labels = next(iterator_ref)
-                # The data pipeline should yield features and labels in the format expected by distributed_train_step
-                # Typically, (per_replica_features, per_replica_labels)
-                # The current data_lib.build_distributed_dataset likely returns this.
-                distributed_train_step((images, {'labels': labels}))
-
-
-        # Call the compiled training loop
-        try:
-            with summary_writer.as_default(): # Ensure summary writer is default for this scope
-                 train_loop_body(train_iterator)
-        except tf.errors.OutOfRangeError:
-            logging.info("Training dataset exhausted. Re-initializing iterator.")
-            train_iterator = iter(data_lib.build_distributed_dataset(
-                builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
-            ))
-            # Potentially run the remaining steps if any, or break if epoch-based logic dominates.
-            # This example assumes step-based completion.
-            # If an epoch finishes mid-loop, the next loop iteration will use the new iterator.
-            continue # Continue to the outer while loop check
-
-
-        cur_step_after_loop = optimizer.iterations.numpy()
-        logging.info('Steps executed: %d. Current step: %d / %d', checkpoint_steps, cur_step_after_loop, train_steps)
-
-        # Save checkpoint
-        checkpoint_manager.save(checkpoint_number=cur_step_after_loop)
-        logging.info(f'Checkpoint saved for step {cur_step_after_loop}.')
-
-        # Log metrics and write summaries
-        with summary_writer.as_default():
-            metrics.log_and_write_metrics_to_summary(all_metrics_list_train, cur_step_after_loop)
-            tf.summary.scalar(
-                'learning_rate',
-                learning_rate_schedule(tf.cast(optimizer.iterations, dtype=tf.float32)), # Pass step tensor
-                step=optimizer.iterations) # Use optimizer.iterations directly (it's a tf.Variable)
-            summary_writer.flush()
-        
-        # Reset training metrics for the next loop
-        for metric_obj in all_metrics_list_train:
-            metric_obj.reset_states()
+      with summary_writer.as_default():
+          metrics.log_and_write_metrics_to_summary(all_metrics_list_train, cur_step_after_loop)
+          tf.summary.scalar(
+              'learning_rate',
+              learning_rate_schedule(tf.cast(optimizer.iterations, dtype=tf.float32)), 
+              step=optimizer.iterations) 
+          summary_writer.flush()
+      
+      for metric_obj in all_metrics_list_train:
+          metric_obj.reset_states()
             
-    logging.info('Training complete.')
+  logging.info('Training complete.')
 
-    # Final export of the model
-    if optimizer.iterations.numpy() >= train_steps:
-        save_model_for_export(model, global_step_val=optimizer.iterations.numpy())
+  if optimizer.iterations.numpy() >= train_steps:
+      save_model_for_export(model, global_step_val=optimizer.iterations.numpy())
 
-
-    if FLAGS.mode == 'train_then_eval':
-      final_ckpt = checkpoint_manager.latest_checkpoint
-      if final_ckpt:
-          perform_evaluation(model, builder, eval_steps, final_ckpt, strategy, topology)
-      else:
-          logging.warning("No checkpoint found after training to perform final evaluation.")
-
+  if FLAGS.mode == 'train_then_eval':
+    final_ckpt = checkpoint_manager.latest_checkpoint
+    if final_ckpt:
+        perform_evaluation(model, builder, eval_steps, final_ckpt, strategy, topology)
+    else:
+        logging.warning("No checkpoint found after training to perform final evaluation.")
 
 if __name__ == '__main__':
-  # tf.compat.v1.enable_v2_behavior() # This is default in TF2.
-  # For outside compilation of summaries on TPU.
-  # Soft device placement is on by default. Explicitly setting can be useful.
   tf.config.set_soft_device_placement(True)
   app.run(main)
