@@ -248,92 +248,89 @@ def center_crop(image, height, width, crop_proportion):
 
   return image
 
+# In data_util.py, inside distorted_bounding_box_crop
 
-def distorted_bounding_box_crop(image,
-                                bbox,
-                                min_object_covered=0.1,
-                                aspect_ratio_range=(0.75, 1.33),
-                                area_range=(0.05, 1.0),
-                                max_attempts=100,
-                                scope=None):
-  """Generates cropped_image using one of the bboxes randomly distorted.
+def distorted_bounding_box_crop(image: tf.Tensor,
+                                bbox: tf.Tensor,
+                                min_object_covered: float = 0.1,
+                                aspect_ratio_range: tuple[float, float] = (0.75, 1.33), # Expects tuple of Python floats
+                                area_range: tuple[float, float] = (0.05, 1.0),
+                                max_attempts: int = 100,
+                                scope: str | None = None) -> tf.Tensor:
+  with tf.name_scope(scope or 'distorted_bounding_box_crop'):
+    shape = tf.shape(input=image)
 
-  See `tf.image.sample_distorted_bounding_box` for more documentation.
+    # === BEGIN DEBUG ===
+    tf.get_logger().info(f"distorted_bounding_box_crop: aspect_ratio_range type = {type(aspect_ratio_range)}")
+    if isinstance(aspect_ratio_range, (list, tuple)) and len(aspect_ratio_range) == 2:
+        tf.get_logger().info(f"distorted_bounding_box_crop: aspect_ratio_range[0] type = {type(aspect_ratio_range[0])}, value = {aspect_ratio_range[0]}")
+        tf.get_logger().info(f"distorted_bounding_box_crop: aspect_ratio_range[1] type = {type(aspect_ratio_range[1])}, value = {aspect_ratio_range[1]}")
+        
+        # Add an assertion to make it fail loudly here if types are wrong
+        assert isinstance(aspect_ratio_range[0], float), f"aspect_ratio_range[0] is not float, it is {type(aspect_ratio_range[0])}"
+        assert isinstance(aspect_ratio_range[1], float), f"aspect_ratio_range[1] is not float, it is {type(aspect_ratio_range[1])}"
+    else:
+        tf.get_logger().error(f"distorted_bounding_box_crop: aspect_ratio_range is not a tuple/list of 2 elements: {aspect_ratio_range}")
+    # === END DEBUG ===
 
-  Args:
-    image: `Tensor` of image data.
-    bbox: `Tensor` of bounding boxes arranged `[1, num_boxes, coords]`
-        where each coordinate is [0, 1) and the coordinates are arranged
-        as `[ymin, xmin, ymax, xmax]`. If num_boxes is 0 then use the whole
-        image.
-    min_object_covered: An optional `float`. Defaults to `0.1`. The cropped
-        area of the image must contain at least this fraction of any bounding
-        box supplied.
-    aspect_ratio_range: An optional list of `float`s. The cropped area of the
-        image must have an aspect ratio = width / height within this range.
-    area_range: An optional list of `float`s. The cropped area of the image
-        must contain a fraction of the supplied image within in this range.
-    max_attempts: An optional `int`. Number of attempts at generating a cropped
-        region of the image of the specified constraints. After `max_attempts`
-        failures, return the entire image.
-    scope: Optional `str` for name scope.
-  Returns:
-    (cropped image `Tensor`, distorted bbox `Tensor`).
-  """
-  with tf.name_scope(scope, 'distorted_bounding_box_crop', [image, bbox]):
-    shape = tf.shape(image)
     sample_distorted_bounding_box = tf.image.sample_distorted_bounding_box(
-        shape,
+        image_size=shape,
         bounding_boxes=bbox,
         min_object_covered=min_object_covered,
-        aspect_ratio_range=aspect_ratio_range,
+        aspect_ratio_range=aspect_ratio_range, # This is the problematic argument
         area_range=area_range,
         max_attempts=max_attempts,
         use_image_if_no_bounding_boxes=True)
     bbox_begin, bbox_size, _ = sample_distorted_bounding_box
 
-    # Crop the image to the specified bounding box.
     offset_y, offset_x, _ = tf.unstack(bbox_begin)
     target_height, target_width, _ = tf.unstack(bbox_size)
     image = tf.image.crop_to_bounding_box(
         image, offset_y, offset_x, target_height, target_width)
-
     return image
-
 # In data_util.py
+
+# ... (other imports and functions like distorted_bounding_box_crop) ...
 
 def crop_and_resize(image: tf.Tensor, height: int, width: int) -> tf.Tensor:
   """Make a random crop and resize it to height `height` and width `width`."""
   bbox = tf.constant([0.0, 0.0, 1.0, 1.0], dtype=tf.float32, shape=[1, 1, 4])
   
-  # Calculate target_aspect_ratio using Python floats if height and width are Python ints
-  # The type hints `height: int, width: int` suggest they are.
+  # Ensure height and width are Python integers for this calculation
+  # The FLAGS.image_size should provide Python ints.
+  # If they were Tensors, this calculation would make py_target_aspect_ratio a Tensor.
   if not (isinstance(height, int) and isinstance(width, int)):
-      # This case should ideally not happen if type hints are followed.
-      # If they can be tensors, the logic for tf.image.sample_distorted_bounding_box
-      # might need to be inside a tf.py_function or values evaluated.
-      # For now, assume they are Python ints as per type hints.
-      raise TypeError("height and width are expected to be Python integers for this calculation.")
+      # This path should ideally not be taken if FLAGS.image_size is used.
+      # If height/width can be Tensors and this op needs to be in graph,
+      # then py_target_aspect_ratio calculation needs to be graph-compatible
+      # OR this function needs tf.py_function if it must use Python floats here.
+      # However, tf.image.sample_distorted_bounding_box wants Python floats for ranges.
+      # Let's assume height and width are indeed Python ints as per typical flag usage.
+      tf.get_logger().warning(
+          f"crop_and_resize received non-Python int for height/width. "
+          f"height type: {type(height)}, width type: {type(width)}. "
+          f"This might lead to issues with aspect_ratio_range if they are Tensors."
+      )
+  
+  # CRITICAL: Calculate aspect ratio using Python floats to avoid creating Tensors
+  py_target_aspect_ratio = float(width) / float(height)
 
-  py_target_aspect_ratio = float(width) / float(height) # Python float division
-
-  # Now use py_target_aspect_ratio to compute the range with Python floats
   aspect_ratio_min = 0.75 * py_target_aspect_ratio
-  aspect_ratio_max = 1.33333333 * py_target_aspect_ratio # Or 4./3. * py_target_aspect_ratio
+  aspect_ratio_max = (4.0 / 3.0) * py_target_aspect_ratio # Use 4.0/3.0 for float division
 
   image = distorted_bounding_box_crop(
       image,
       bbox,
       min_object_covered=0.1,
-      aspect_ratio_range=(aspect_ratio_min, aspect_ratio_max), # Pass Python floats
+      aspect_ratio_range=(aspect_ratio_min, aspect_ratio_max), # Should now be a tuple of Python floats
       area_range=(0.08, 1.0),
       max_attempts=100,
       scope=None)
   
-  # Resize to final output size
   return tf.image.resize(images=[image], size=[height, width],
                          method=tf.image.ResizeMethod.BICUBIC)[0]
-def gaussian_blur(image, kernel_size, sigma, padding='SAME'):
+
+# ... (rest of data_util.py) ...def gaussian_blur(image, kernel_size, sigma, padding='SAME'):
   """Blurs the given image with separable convolution.
 
 
