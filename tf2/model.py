@@ -28,6 +28,8 @@ import data_util
 import lars_optimizer
 import resnet
 from typing import Union, Callable # Add Callable as well for `callable`
+from typing import Optional
+
 
 FLAGS = flags.FLAGS
 
