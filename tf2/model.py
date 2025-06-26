@@ -179,6 +179,9 @@ class WarmUpAndCosineDecay(tf.keras.optimizers.schedules.LearningRateSchedule):
         config['name'] = self._name
     return config
 
+# In model.py (relevant part)
+
+# ... (imports and other class parts) ...
 
 class LinearLayer(tf.keras.layers.Layer):
   """A Keras layer for linear transformation with optional BatchNorm."""
@@ -188,98 +191,81 @@ class LinearLayer(tf.keras.layers.Layer):
                use_bias: bool = True,
                use_bn: bool = False,
                kernel_initializer: Union[str, tf.keras.initializers.Initializer] = tf.keras.initializers.RandomNormal(stddev=0.01),
-               name: str = 'linear_layer',
+               name: str = 'linear_layer', # Corrected: 'name' was self._name before
                **kwargs):
-    super().__init__(name=name, **kwargs)
-    self.num_classes_config = num_classes # Store original config for get_config
+    super().__init__(name=name, **kwargs) # Pass name to super
+    self.num_classes_config = num_classes 
     self.use_bias = use_bias
     self.use_bn = use_bn
-    self.kernel_initializer_config = kernel_initializer # Store original config
+    self.kernel_initializer_config = kernel_initializer 
 
-    # Kernel initializer will be resolved from string/object in build or here
     self.kernel_initializer = tf.keras.initializers.get(kernel_initializer)
 
     if self.use_bn:
-      self.bn_layer = resnet.BatchNormRelu(
+      self.bn_layer = resnet.BatchNormRelu( # Make sure resnet is imported
           relu=False, 
-          center=self.use_bias, # BN's beta acts as bias if use_bias=True
+          center=self.use_bias, 
           name="batch_norm" 
-          # Pass other relevant BN params like data_format if needed by BatchNormRelu
       )
     else:
         self.bn_layer = None
     
-    # Dense layer units will be properly set in the build method
-    # use_bias for dense layer is only True if no BN is used, or if BN is used but doesn't provide centering.
-    # Typically, if BN is used, its beta parameter (center=True) replaces the Dense layer's bias.
     self.dense_layer = tf.keras.layers.Dense(
-        units=1, # Placeholder, will be set in build
-        kernel_initializer=self.kernel_initializer, # Pass the resolved initializer object
+        units=1, 
+        kernel_initializer=self.kernel_initializer,
         use_bias=self.use_bias and not self.use_bn, 
         name="dense"
     )
 
   def build(self, input_shape: tf.TensorShape):
-    # Determine the actual number of output units/classes
     if callable(self.num_classes_config):
       _actual_num_classes = self.num_classes_config(input_shape)
     else:
       _actual_num_classes = self.num_classes_config
     
-    # Configure the dense layer with the correct number of units
-    # This might require re-building the dense layer if units cannot be set post-init
-    # or ensuring the dense layer is built here.
-    if self.dense_layer.units != _actual_num_classes:
-        # If dense layer was already built with placeholder units, need to rebuild or re-init.
-        # It's cleaner to define dense layer's units here if possible,
-        # or fully define it in __init__ if num_classes is always int.
-        # For now, let's assume we can set units and then build.
-        self.dense_layer.units = _actual_num_classes
-
-    if not self.dense_layer.built:
-        self.dense_layer.build(input_shape)
+    if self.dense_layer.units != _actual_num_classes or not self.dense_layer.built:
+        self.dense_layer.units = _actual_num_classes # Set units
+        if not self.dense_layer.built:
+             self.dense_layer.build(input_shape) # Build dense layer
         
     if self.use_bn and self.bn_layer is not None:
-        # bn_layer expects the shape of its input, which is the output of the dense_layer
-        # The output shape of dense_layer is (batch_size, _actual_num_classes)
-        # We need to construct a shape that bn_layer.build can use.
-        # Assuming input_shape is (batch_size, features_in)
         if input_shape.rank > 0 and input_shape[0] is not None:
             dense_output_shape = tf.TensorShape([input_shape[0], _actual_num_classes])
-        else: # If batch size is not known, pass None
+        else: 
             dense_output_shape = tf.TensorShape([None, _actual_num_classes])
         
         if not self.bn_layer.built:
              self.bn_layer.build(dense_output_shape)
 
-    super().build(input_shape) # Call base class build last
+    super().build(input_shape)
 
+  # This is line 257 according to your traceback
   def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
+    # Ensure next line is correctly indented (e.g., 4 spaces or 1 tab from the 'def' level)
     if inputs.shape.rank != 2:
         raise ValueError(f"Input tensor must have rank 2 (batch_size, features), got rank {inputs.shape.rank} (shape {inputs.shape})")
     
-    x = self.dense_layer(inputs)
+    x = self.dense_layer(inputs) # Pass inputs, not training here unless Dense layer uses it
     if self.use_bn and self.bn_layer is not None:
-      x = self.bn_layer(x, training=training)
+      x = self.bn_layer(x, training=training) # Pass training to BN layer
     return x
 
   def get_config(self) -> dict:
     config = super().get_config()
-    # Serialize the original config values passed to __init__
     serialized_num_classes = None
     if not callable(self.num_classes_config):
         serialized_num_classes = self.num_classes_config
-    # Note: serializing a callable num_classes is non-trivial and usually avoided in get_config.
-    # Users would need to pass the same callable when re-instantiating.
-    # If it's critical, one might store a string identifier for the callable.
     
     config.update({
-        'num_classes': serialized_num_classes, # Or handle callable serialization if necessary
+        'num_classes': serialized_num_classes, 
         'use_bias': self.use_bias,
         'use_bn': self.use_bn,
-        'kernel_initializer': tf.keras.initializers.serialize(self.kernel_initializer), # Serialize the initializer object
+        'kernel_initializer': tf.keras.initializers.serialize(self.kernel_initializer),
     })
     return config
+
+# ... (rest of model.py)
+
 class ProjectionHead(tf.keras.layers.Layer):
   """Projection head for SimCLR, mapping representation h to z."""
 
