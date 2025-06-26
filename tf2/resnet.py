@@ -110,6 +110,10 @@ class BatchNormRelu(tf.keras.layers.Layer):
     return config
 
 
+# In resnet.py
+
+# ... (other code above DropBlock) ...
+
 class DropBlock(tf.keras.layers.Layer):
   """DropBlock: A regularization method for convolutional networks."""
 
@@ -133,20 +137,13 @@ class DropBlock(tf.keras.layers.Layer):
     else: # channels_first
       _, _, height, width = net.shape.as_list()
 
-    # The original paper and SimCLR code seem to assume square feature maps for DropBlock logic.
-    # If not square, using 'width' (as in original) or 'height' or min(width,height) could be choices.
-    # The original SimCLR code used `width` variable which was assigned `net.shape[1]` or `net.shape[2]`
-    # and then used it for calculations assuming width==height.
-    # We will use `height` as the spatial dimension, assuming H=W for simplicity as per original.
-    # If H!=W, this logic might need adjustment based on desired behavior.
-    feature_map_size = height # Or width, if that was the intended dimension.
+    feature_map_size = height
 
     if not (isinstance(self.dropblock_size, int) and self.dropblock_size > 0):
         raise ValueError(f"dropblock_size must be a positive integer, got {self.dropblock_size}")
     
     _dropblock_size = min(self.dropblock_size, feature_map_size)
 
-    # Formula from paper: gamma = (1-keep_prob)/block_size^2 * (feat_size^2 / (feat_size-block_size+1)^2)
     denominator_sq = (feature_map_size - _dropblock_size + 1)**2
     if denominator_sq == 0:
         seed_drop_rate = (1.0 - self.keep_prob) if _dropblock_size == feature_map_size else 1.0
@@ -154,10 +151,6 @@ class DropBlock(tf.keras.layers.Layer):
         seed_drop_rate = (1.0 - self.keep_prob) * (feature_map_size**2) / \
                          (_dropblock_size**2) / denominator_sq
     
-    #logging.info(
-    #    f'Applying DropBlock: dropblock_size {self.dropblock_size} (actual {_dropblock_size}), '
-    #    f'keep_prob {self.keep_prob}, seed_drop_rate {seed_drop_rate}, net.shape {net.shape}')
-
     grid_range = tf.range(feature_map_size, dtype=tf.int32)
     h_i, w_i = tf.meshgrid(grid_range, grid_range)
 
@@ -171,8 +164,24 @@ class DropBlock(tf.keras.layers.Layer):
     valid_block_center = tf.logical_and(valid_block_center_h, valid_block_center_w)
 
     valid_block_center = tf.expand_dims(valid_block_center, axis=0)
+    
+    # ***** 여기가 수정된 부분입니다 *****
+    axis_to_expand_on = 1 if self.data_format == 'channels_first' else -1 # Corrected: axis=1 for NCHW means C dim
     valid_block_center = tf.expand_dims(
-        valid_block_center, axis=-1 if self.data_format == 'channels_last' else axis=1)
+        valid_block_center, axis=axis_to_expand_on)
+    # The original SimCLR code had:
+    # `axis=-1 if data_format == 'channels_last' else 0)`
+    # axis 0 would be batch. For NCHW (C is axis 1), if valid_block_center is (1, H, W)
+    # tf.expand_dims(valid_block_center, axis=1) -> (1, 1, H, W) is correct for broadcasting with (N, C, H, W)
+    # Let's re-verify the original comment:
+    # `valid_block_center = tf.expand_dims(valid_block_center, -1 if data_format == 'channels_last' else 0)`
+    # If NCHW, axis 0 would make it (1, 1, H, W), which is suitable for broadcasting with (N,C,H,W) if C=1.
+    # But usually, it's (N,C,H,W) and the mask is (1,1,H,W) or (1,C,H,W).
+    # If the mask is spatial only, (1,1,H,W) is desired.
+    # Given `valid_block_center` is (1, H, W) after first expand_dims:
+    # - For channels_last (NHWC): tf.expand_dims(vb, axis=-1) -> (1, H, W, 1). Correct.
+    # - For channels_first (NCHW): tf.expand_dims(vb, axis=1) -> (1, 1, H, W). Correct for spatial mask.
+    # So the corrected logic `axis_to_expand_on = 1 if self.data_format == 'channels_first' else -1` is what we need.
 
     randnoise = tf.random.uniform(net.shape, dtype=tf.float32)
     
@@ -203,7 +212,7 @@ class DropBlock(tf.keras.layers.Layer):
                    tf.cast(tf.size(input=block_pattern), tf.float32)
     
     net = net * tf.cast(block_pattern, net.dtype)
-    net = net / (percent_ones + 1e-12) # Add epsilon for stability
+    net = net / (percent_ones + 1e-12)
     
     return net
 
@@ -216,6 +225,7 @@ class DropBlock(tf.keras.layers.Layer):
     })
     return config
 
+# ... (rest of resnet.py) ...
 
 class FixedPadding(tf.keras.layers.Layer):
   """Pads the input along the spatial dimensions independently of input size."""
