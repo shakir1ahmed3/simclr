@@ -778,17 +778,17 @@ def main(argv):
     # Build training dataset iterator
 # In run.py, inside main(), right after the scope for checkpoint_manager:
 
-  logging.info("Checkpoint logic complete. Attempting to create data iterator...") # NEW LOG 1
-  try:
-      train_iterator = iter(data_lib.build_distributed_dataset(
-          builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
-      ))
-      logging.info("Data iterator CREATED successfully.") # NEW LOG 2
-  except Exception as e:
-      logging.error(f"ERROR CREATING DATA ITERATOR: {e}", exc_info=True) # NEW LOG 3 (if error)
-      raise # Stop if iterator fails
+    logging.info("Checkpoint logic complete. Attempting to create data iterator...") # NEW LOG 1
+    try:
+        train_iterator = iter(data_lib.build_distributed_dataset(
+            builder, FLAGS.train_batch_size, is_training=True, strategy=strategy, topology=topology
+        ))
+        logging.info("Data iterator CREATED successfully.") # NEW LOG 2
+    except Exception as e:
+        logging.error(f"ERROR CREATING DATA ITERATOR: {e}", exc_info=True) # NEW LOG 3 (if error)
+        raise # Stop if iterator fails
 
-  logging.info("Starting training...") # Your existing log
+    logging.info("Starting training...") # Your existing log
 # ... (rest of the training loop) ...
     # Get current step from optimizer.iterations
     # optimizer.iterations is a tf.Variable
