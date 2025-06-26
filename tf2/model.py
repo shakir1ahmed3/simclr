@@ -243,7 +243,7 @@ class LinearLayer(tf.keras.layers.Layer):
   def call(self, inputs: tf.Tensor, training: Optional[bool] = None) -> tf.Tensor:
     # Ensure next line is correctly indented (e.g., 4 spaces or 1 tab from the 'def' level)
     if inputs.shape.rank != 2:
-        raise ValueError(f"Input tensor must have rank 2 (batch_size, features), got rank {inputs.shape.rank} (shape {inputs.shape})")
+      raise ValueError(f"Input tensor must have rank 2 (batch_size, features), got rank {inputs.shape.rank} (shape {inputs.shape})")
     
     x = self.dense_layer(inputs) # Pass inputs, not training here unless Dense layer uses it
     if self.use_bn and self.bn_layer is not None:
