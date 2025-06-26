@@ -78,16 +78,16 @@ class BatchNormRelu(tf.keras.layers.Layer):
           name="sync_batch_norm"
       )
     else:
-      self.bn = tf.keras.layers.BatchNormalization(
-          axis=axis,
-          momentum=self._batch_norm_decay,
-          epsilon=BATCH_NORM_EPSILON,
-          center=center,
-          scale=scale,
-          fused=None,
-          gamma_initializer=gamma_initializer,
-          name="batch_norm"
-      )
+self.bn = tf.keras.layers.BatchNormalization(
+    axis=axis,
+    momentum=self._batch_norm_decay,
+    epsilon=BATCH_NORM_EPSILON,
+    center=center,
+    scale=scale,
+    gamma_initializer=gamma_initializer,
+    name="batch_norm"
+)
+
 
   def call(self, inputs: tf.Tensor, training: bool | None = None) -> tf.Tensor:
     x = self.bn(inputs, training=training)
