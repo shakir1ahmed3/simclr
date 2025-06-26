@@ -35,31 +35,23 @@ Residual networks (ResNets) were proposed in:
     Deep Residual Learning for Image Recognition. arXiv:1512.03385
 """
 
-from absl import flags
-from absl import logging # Import for logging
-import tensorflow as tf
-
-
-FLAGS = flags.FLAGS
-BATCH_NORM_EPSILON = 1e-5
-
-
 # In resnet.py
 
 from absl import flags
 from absl import logging
 import tensorflow as tf
+import keras # For Keras 3
 
-# Try importing SyncBatchNormalization directly from tensorflow.keras.layers or keras.layers
-try:
-    from tensorflow.keras.layers import SyncBatchNormalization
-except ImportError:
-    # Fallback for Keras 3 being the primary 'keras' import
-    # This might happen if `import keras` is used elsewhere and TF defaults to Keras 3 paths.
-    # Or if TF_USE_LEGACY_KERAS is NOT set, Keras 3 is the default.
-    import keras # Or: from tensorflow import keras
-    SyncBatchNormalization = keras.layers.SyncBatchNormalization
+# Conditional import for SyncBatchNormalization
+# Only attempt to import it if FLAGS.global_bn suggests it might be used.
+# However, the class logic itself handles the switch.
+# The previous error was that `keras.layers` (Keras 3) didn't have it directly.
+# For Keras 3, it should be `keras.layers.experimental.SyncBatchNormalization` if available
+# or just stick to `tf.keras.layers.BatchNormalization` if global_bn is False.
 
+# Let's simplify: the BatchNormRelu class will decide.
+# No top-level dynamic import of SyncBatchNormalization needed here if
+# FLAGS.global_bn correctly dictates its usage.
 
 FLAGS = flags.FLAGS
 BATCH_NORM_EPSILON = 1e-5
@@ -82,26 +74,61 @@ class BatchNormRelu(tf.keras.layers.Layer):
     self.center = center
     self.scale = scale
     self.data_format = data_format
-    # It's better to read FLAGS once and store, or pass them if this layer is to be more reusable.
-    self._batch_norm_decay = getattr(FLAGS, 'batch_norm_decay', 0.9) # Provide default if flag not found
-    self._global_bn = getattr(FLAGS, 'global_bn', True) # Provide default
+    self._batch_norm_decay = getattr(FLAGS, 'batch_norm_decay', 0.9)
+    # Read FLAGS.global_bn. If you are on a single GPU, this should ideally be False.
+    self._global_bn = getattr(FLAGS, 'global_bn', False) # <<<< Default to False if single GPU
 
     gamma_initializer = tf.zeros_initializer() if init_zero else tf.ones_initializer()
     axis = -1 if data_format == 'channels_last' else 1
 
     if self._global_bn:
-      # Use the imported SyncBatchNormalization
-      self.bn = SyncBatchNormalization( 
-          axis=axis,
-          momentum=self._batch_norm_decay,
-          epsilon=BATCH_NORM_EPSILON,
-          center=center,
-          scale=scale,
-          gamma_initializer=gamma_initializer,
-          name="sync_batch_norm"
-      )
-    else:
-      self.bn = tf.keras.layers.BatchNormalization( # Standard BN is fine here
+      # This block will only be entered if FLAGS.global_bn is True.
+      # If you're on a single GPU, this part should ideally not be hit
+      # if FLAGS.global_bn is correctly set to False.
+      # If it IS hit on single GPU and causes an error, it means SyncBN isn't available/appropriate.
+      try:
+          # For TensorFlow 2.x with Keras 2 API style
+          _SyncBatchNormalization = tf.keras.layers.SyncBatchNormalization
+      except AttributeError:
+          # For Keras 3 (often the default in TF 2.16+)
+          # Keras 3 might place SyncBatchNormalization under an experimental namespace
+          # or it might not be relevant if not in a distributed context.
+          # If this fails, it indicates SyncBN is not meant for the current setup.
+          try:
+              _SyncBatchNormalization = keras.layers.experimental.SyncBatchNormalization
+              logging.warning("Using keras.layers.experimental.SyncBatchNormalization. "
+                              "Ensure you are in a distributed training setup if global_bn is True.")
+          except AttributeError:
+              logging.error(
+                  "SyncBatchNormalization not found even in keras.layers.experimental. "
+                  "If global_bn is True, you must be in a distributed environment "
+                  "where it's supported. Falling back to BatchNormalization."
+              )
+              self._global_bn = False # Force to False if not found
+
+      if self._global_bn: # Re-check after potential fallback
+          self.bn = _SyncBatchNormalization( 
+              axis=axis,
+              momentum=self._batch_norm_decay,
+              epsilon=BATCH_NORM_EPSILON,
+              center=center,
+              scale=scale,
+              gamma_initializer=gamma_initializer,
+              name="sync_batch_norm"
+          )
+      else: # Fallback case from within the if self._global_bn block
+          self.bn = tf.keras.layers.BatchNormalization(
+              axis=axis,
+              momentum=self._batch_norm_decay,
+              epsilon=BATCH_NORM_EPSILON,
+              center=center,
+              scale=scale,
+              fused=None, 
+              gamma_initializer=gamma_initializer,
+              name="batch_norm_fallback"
+          )
+    else: # This is the path taken if FLAGS.global_bn is False initially
+      self.bn = tf.keras.layers.BatchNormalization(
           axis=axis,
           momentum=self._batch_norm_decay,
           epsilon=BATCH_NORM_EPSILON,
@@ -111,7 +138,7 @@ class BatchNormRelu(tf.keras.layers.Layer):
           gamma_initializer=gamma_initializer,
           name="batch_norm"
       )
-  # ... rest of BatchNormRelu class (call, get_config) ...
+
   def call(self, inputs: tf.Tensor, training: bool | None = None) -> tf.Tensor:
     x = self.bn(inputs, training=training)
     if self.relu:
@@ -127,13 +154,11 @@ class BatchNormRelu(tf.keras.layers.Layer):
         "scale": self.scale,
         "data_format": self.data_format,
         "batch_norm_decay": self._batch_norm_decay,
-        "global_bn": self._global_bn,
+        "global_bn": self._global_bn, # Reflects the actual state
     })
     return config
 
 # ... rest of resnet.py ...
-
-# In resnet.py
 
 # ... (other code above DropBlock) ...
 
