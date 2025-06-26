@@ -300,31 +300,39 @@ def distorted_bounding_box_crop(image,
 
     return image
 
+# In data_util.py
 
-def crop_and_resize(image, height, width):
-  """Make a random crop and resize it to height `height` and width `width`.
-
-  Args:
-    image: Tensor representing the image.
-    height: Desired image height.
-    width: Desired image width.
-
-  Returns:
-    A `height` x `width` x channels Tensor holding a random crop of `image`.
-  """
+def crop_and_resize(image: tf.Tensor, height: int, width: int) -> tf.Tensor:
+  """Make a random crop and resize it to height `height` and width `width`."""
   bbox = tf.constant([0.0, 0.0, 1.0, 1.0], dtype=tf.float32, shape=[1, 1, 4])
-  aspect_ratio = width / height
+  
+  # Calculate target_aspect_ratio using Python floats if height and width are Python ints
+  # The type hints `height: int, width: int` suggest they are.
+  if not (isinstance(height, int) and isinstance(width, int)):
+      # This case should ideally not happen if type hints are followed.
+      # If they can be tensors, the logic for tf.image.sample_distorted_bounding_box
+      # might need to be inside a tf.py_function or values evaluated.
+      # For now, assume they are Python ints as per type hints.
+      raise TypeError("height and width are expected to be Python integers for this calculation.")
+
+  py_target_aspect_ratio = float(width) / float(height) # Python float division
+
+  # Now use py_target_aspect_ratio to compute the range with Python floats
+  aspect_ratio_min = 0.75 * py_target_aspect_ratio
+  aspect_ratio_max = 1.33333333 * py_target_aspect_ratio # Or 4./3. * py_target_aspect_ratio
+
   image = distorted_bounding_box_crop(
       image,
       bbox,
       min_object_covered=0.1,
-      aspect_ratio_range=(3. / 4 * aspect_ratio, 4. / 3. * aspect_ratio),
+      aspect_ratio_range=(aspect_ratio_min, aspect_ratio_max), # Pass Python floats
       area_range=(0.08, 1.0),
       max_attempts=100,
       scope=None)
-  return tf.image.resize_bicubic([image], [height, width])[0]
-
-
+  
+  # Resize to final output size
+  return tf.image.resize(images=[image], size=[height, width],
+                         method=tf.image.ResizeMethod.BICUBIC)[0]
 def gaussian_blur(image, kernel_size, sigma, padding='SAME'):
   """Blurs the given image with separable convolution.
 
